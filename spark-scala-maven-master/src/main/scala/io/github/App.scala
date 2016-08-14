@@ -7,19 +7,21 @@ import java.text.SimpleDateFormat
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.rdd.RDD
 
 object App {
 
   case class Measurement(id: Integer, time: Long, lat: Double, long: Double)
+  case class Trippoint(id: Integer, time: Long, hash: String)
 
   val base32 = "0123456789bcdefghjkmnpqrstuvwxyz".toList
   val decodeMap = base32.zipWithIndex.toMap
-  val sources = "C:\\Facultate\\Liceenta\\Sources\\"
-  val results = "C:\\Facultate\\Liceenta\\Results\\"
+  val sources = "E:\\Facultate\\Liceenta\\Sources\\"
+  val results = "E:\\Facultate\\Liceenta\\Results\\"
 
   def mid(interval: (Double, Double)) = (interval._1 + interval._2) / 2.0
 
-  def decode( geohash:String ):((Double,Double),(Double,Double)) = {
+  def decodeLimits( geohash:String ):((Double,Double),(Double,Double)) = {
     def toBitList(s: String) = s.flatMap {
       c => ("00000" + base32.indexOf(c).toBinaryString).
         reverse.take(5).reverse.map('1' ==)
@@ -43,6 +45,12 @@ object App {
 
     val ( xs ,ys ) = split( toBitList( geohash ) )
     ( dehash( ys ,-90,90) , dehash( xs, -180,180 ) )
+  }
+
+  def decode( geohash:String ):(Double,Double) = {
+    decodeLimits(geohash) match {
+      case ((minLat,maxLat),(minLng,maxLng)) => ( (maxLat+minLat)/2, (maxLng+minLng)/2 )
+    }
   }
 
   def encode(lat: Double, lon: Double, precision: Int = 12): (String) = {
@@ -91,6 +99,10 @@ object App {
     return geohash
   }
 
+  def customLocationEquals(o1: Measurement, o2: Measurement) = {
+    o1.lat == o2.lat && o1.long == o2.long
+  }
+
   def main(args: Array[String]) {
     val conf = new SparkConf().setAppName("Hello Spark")
     conf.setMaster("local[*]")
@@ -127,7 +139,8 @@ object App {
       })
 
       val sortedCoordinates: List[Measurement] = coordinates.toList.sortBy(m => m.time)
-      var trips = List[List[Measurement]]()
+      var rawTrips = List[List[Measurement]]()
+      var trips = List[List[Trippoint]]()
 
       for (i <- 0 until tripEnds.length - 1 by 2) {
         var trip = List[Measurement]()
@@ -137,22 +150,30 @@ object App {
           }
         }
 
-        trips = trip :: trips
+        rawTrips = trip :: rawTrips
       }
+
+      rawTrips.foreach(trip =>
+        trips = trip.sliding(2)
+          .filter(pair => !customLocationEquals(pair.tail.head, pair.head))
+          .map(_.tail.head).toList.map({
+            case Measurement(id: Integer, time: Long, lat: Double, long: Double) =>
+              Trippoint(id, time, encode(lat, long))
+          }) :: trips
+      )
 
       new PrintWriter(results + "trips.txt") {
         for (trip <- trips) {
           for (point <- trip) {
             println(point.id + ","
               + new SimpleDateFormat("yyyy-MM-dd hh:mm:ss").format(point.time) + ","
-              + point.lat + ","
-              + point.long)
+              + point.hash)
           }
         }
       }
 
       new PrintWriter(results + "geohash.txt") {
-        for (trip <- trips) {
+        for (trip <- rawTrips) {
           for (point <- trip) {
             val geohash = encode(point.lat, point.long)
             println(point.id + ","
@@ -165,7 +186,7 @@ object App {
         }
       }
 
-      trips.size
+      rawTrips.size
     }).collect.foreach(println)
 
     sc.stop()
