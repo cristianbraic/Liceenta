@@ -4,7 +4,7 @@ import java.io.PrintWriter
 import java.sql.Timestamp
 import java.text.SimpleDateFormat
 
-import org.apache.spark.rdd.RDD
+import org.apache.spark.mllib.fpm.FPGrowth
 import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
