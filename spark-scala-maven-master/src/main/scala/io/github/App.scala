@@ -9,6 +9,8 @@ import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
 
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+
 object App {
 
   case class Measurement(id: Integer, time: Long, lat: Double, long: Double)
@@ -108,6 +110,7 @@ object App {
     conf.setMaster("local[*]")
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
     conf.set("spark.kryoserializer.buffer", "24")
+    conf.registerKryoClasses(Array(classOf[ArrayBuffer[String]], classOf[ListBuffer[String]]))
 
     val sc = new SparkContext(conf)
     val sqlContext = new SQLContext(sc)
@@ -188,6 +191,27 @@ object App {
 
       rawTrips.size
     }).collect.foreach(println)
+
+    val data = sc.textFile(results + "trips.txt")
+
+    val transactions: RDD[Array[String]] = data.map(s => s.trim.split(','))
+
+    val fpg = new FPGrowth()
+      .setMinSupport(0.2)
+      .setNumPartitions(12)
+    val model = fpg.run(transactions)
+
+    model.freqItemsets.collect().foreach { itemset =>
+      println(itemset.items.mkString("[", ",", "]") + ", " + itemset.freq)
+    }
+
+    val minConfidence = 0.8
+    model.generateAssociationRules(minConfidence).collect().foreach { rule =>
+      println(
+        rule.antecedent.mkString("[", ",", "]")
+          + " => " + rule.consequent .mkString("[", ",", "]")
+          + ", " + rule.confidence)
+    }
 
     sc.stop()
   }
