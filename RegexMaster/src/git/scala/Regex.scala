@@ -11,16 +11,18 @@ object Regex {
 
     val lines = Source.fromFile(file) // use fromFile here
     val regex1 = ";".r
-    val regex3 = "\\)".r
-    val regex4 = "\\..*\\(".r
+    val regex2 = "\\)".r
+    val regex3 = "\\..*\\(".r
+    val regex4 = "\\+.*\\(".r
 
     val pw = new PrintWriter(new File("J:\\Facultate\\taxi_february_remastered.txt" ))
 
     for (line <- lines.getLines) {
       if (line != "") {
         var processedLine = regex4.replaceAllIn(line, ",")
+        processedLine = regex3.replaceAllIn(processedLine, ",")
         processedLine = regex1.replaceAllIn(processedLine, ",")
-        processedLine = regex3.replaceAllIn(processedLine, "")
+        processedLine = regex2.replaceAllIn(processedLine, "")
         processedLine = processedLine.patch(processedLine.lastIndexOf(' '), ",", 1)
         pw.println(processedLine)
       }
