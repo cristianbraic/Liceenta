@@ -1,11 +1,14 @@
 package io.github
 
+import java.io.PrintWriter
 import java.sql.Timestamp
+import java.text.SimpleDateFormat
 
 import org.apache.spark.mllib.fpm.FPGrowth
 import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
+import ch.hsr.geohash.GeoHash
 
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
@@ -55,7 +58,7 @@ object App {
     }
   }
 
-  def encode(lat: Double, lon: Double, precision: Int = 12): (String) = {
+  def encode(lat: Double, lon: Double, precision: Int = 6): (String) = {
     var idx = 0;
     // index into base32 map
     var bit = 0;
@@ -111,7 +114,8 @@ object App {
   }
 
   def main(args: Array[String]) {
-    var resultedTrips: List[List[Product with java.io.Serializable]] = List[List[TripPoint]]()
+    val sequencesFileWriter = new PrintWriter(results + "Sequences.txt")
+    val frequentSequenciesWriter = new PrintWriter(results + "FrequentSequences.txt")
 
     val conf = new SparkConf().setAppName("Detectarea secventelor frecvente in trafic")
     conf.setMaster("local[*]")
@@ -132,7 +136,7 @@ object App {
 
     val coordinatesRDD: RDD[TripPoint] = df.map({
       case Row(id: Int, time: Timestamp, lat: Double, long: Double) =>
-        TripPoint(id, time.getTime, encode(lat, long))
+        TripPoint(id, time.getTime, GeoHash.withCharacterPrecision(lat, long, 7).toBase32)
       case _ => TripPoint(0, 0, "")
     })
 
@@ -155,7 +159,6 @@ object App {
 
       val sortedCoordinates: List[TripPoint] = coordinates.toList.sortBy(m => m.time)
       var rawTrips = List[List[TripPoint]]()
-      //var trips = List[List[Trippoint]]()
 
       for (i <- 0 until tripEnds.length - 1 by 2) {
         var trip = List[TripPoint]()
@@ -166,69 +169,38 @@ object App {
         }
 
         if (!trip.isEmpty) {
+          trip = trip.groupBy(_.hash).map(_._2.head).toList
           rawTrips = trip :: rawTrips
         }
       }
 
-      /*new PrintWriter(results + "trips" + i + ".txt") {
-        for (trip <- rawTrips) {
-          for (point <- trip) {
-            println(point.id + ","
-              + new SimpleDateFormat("yyyy-MM-dd hh:mm:ss").format(point.time) + ","
-              + point.hash)
-          }
-        }
-      }*/
-
-      /*new PrintWriter(results + "geohash" + i + ".txt") {
-        for (trip <- rawTrips) {
-          for (point <- trip) {
-            val geohash = encode(point.lat, point.long)
-            println(point.id + ","
-              + new SimpleDateFormat("yyyy-MM-dd hh:mm:ss").format(point.time) + ","
-              + point.lat + ","
-              + point.long + "    encoded: "
-              + geohash + "    decoded: "
-              + decode(geohash))
-          }
-        }
-      }*/
-
       rawTrips
-    }).collect.foreach(trip => resultedTrips = trip :: resultedTrips)
+    }).collect.foreach(trip => {
+      trip.foreach(h => {
+        h.map {
+          case h: TripPoint => {sequencesFileWriter.print(h.hash + " ")}
+          case _ => ""}
+        sequencesFileWriter.println()})
+      })
 
-    val intermediate: List[Product with java.io.Serializable] = resultedTrips.flatten
+    sequencesFileWriter.close()
 
-    var arrayOfPoints: Array[List[String]] = resultedTrips.flatMap(taxi => taxi map {
-      case p:List[TripPoint] => p.map({
-       case TripPoint(id: Integer, time: Long, hash: String) => hash
-      }).take(20)
-    }).toArray
-
-    arrayOfPoints = arrayOfPoints.take(10)
-
-    var unique: Array[List[String]] = new Array[List[String]](0)
-
-    arrayOfPoints.foreach(list => unique = unique :+ list.distinct)
-
-    val transactions = sc.parallelize(Seq(unique))
+    val data = sc.textFile(results + "Sequences.txt")
+    val transactions: RDD[Array[String]] = data.map(s => s.trim.split(' '))
 
     val fpg = new FPGrowth()
-      .setMinSupport(0.9)
+      .setMinSupport(0.2)
+      .setNumPartitions(10)
     val model = fpg.run(transactions)
 
-    model.freqItemsets.foreach { itemset =>
+    model.freqItemsets.collect.foreach ( itemset => {
       println(itemset.items.mkString("[", ",", "]") + ", " + itemset.freq)
-    }
+      itemset.items.foreach(item =>
+        frequentSequenciesWriter.println(GeoHash.fromGeohashString(item).getBoundingBoxCenterPoint.toString.stripPrefix("(").stripSuffix(")").trim)
+      )}
+    )
 
-    val minConfidence = 0.8
-    model.generateAssociationRules(minConfidence).collect().foreach { rule =>
-      println(
-        rule.antecedent.mkString("[", ",", "]")
-          + " => " + rule.consequent.mkString("[", ",", "]")
-          + ", " + rule.confidence)
-    }
-
+    frequentSequenciesWriter.close()
     sc.stop()
   }
 }
