@@ -1,8 +1,6 @@
 package io.github
 
-import java.io.PrintWriter
 import java.sql.Timestamp
-import java.text.SimpleDateFormat
 
 import org.apache.spark.mllib.fpm.FPGrowth
 import org.apache.spark.sql.{Row, SQLContext}
@@ -14,16 +12,18 @@ import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 object App {
 
   case class Measurement(id: Integer, time: Long, lat: Double, long: Double)
-  case class Trippoint(id: Integer, time: Long, hash: String)
+
+  case class TripPoint(id: Integer, time: Long, hash: String)
 
   val base32 = "0123456789bcdefghjkmnpqrstuvwxyz".toList
   val decodeMap = base32.zipWithIndex.toMap
-  val sources = "E:\\Facultate\\Liceenta\\Sources\\"
-  val results = "E:\\Facultate\\Liceenta\\Results\\"
+  val sources = "C:\\Facultate\\Liceenta\\Sources\\"
+  val results = "C:\\Facultate\\Liceenta\\Results\\"
+  var i:Integer = 0
 
   def mid(interval: (Double, Double)) = (interval._1 + interval._2) / 2.0
 
-  def decodeLimits( geohash:String ):((Double,Double),(Double,Double)) = {
+  def decodeLimits(geohash: String): ((Double, Double), (Double, Double)) = {
     def toBitList(s: String) = s.flatMap {
       c => ("00000" + base32.indexOf(c).toBinaryString).
         reverse.take(5).reverse.map('1' ==)
@@ -37,21 +37,21 @@ object App {
       }
     }
 
-    def dehash( xs:List[Boolean] , min:Double,max:Double):(Double,Double) = {
-      ((min,max) /: xs ){
-        case ((min,max) ,b) =>
-          if( b )( (min + max )/2 , max )
-          else ( min,(min + max )/ 2 )
+    def dehash(xs: List[Boolean], min: Double, max: Double): (Double, Double) = {
+      ((min, max) /: xs) {
+        case ((min, max), b) =>
+          if (b) ((min + max) / 2, max)
+          else (min, (min + max) / 2)
       }
     }
 
-    val ( xs ,ys ) = split( toBitList( geohash ) )
-    ( dehash( ys ,-90,90) , dehash( xs, -180,180 ) )
+    val (xs, ys) = split(toBitList(geohash))
+    (dehash(ys, -90, 90), dehash(xs, -180, 180))
   }
 
-  def decode( geohash:String ):(Double,Double) = {
+  def decode(geohash: String): (Double, Double) = {
     decodeLimits(geohash) match {
-      case ((minLat,maxLat),(minLng,maxLng)) => ( (maxLat+minLat)/2, (maxLng+minLng)/2 )
+      case ((minLat, maxLat), (minLng, maxLng)) => ((maxLat + minLat) / 2, (maxLng + minLng) / 2)
     }
   }
 
@@ -102,11 +102,18 @@ object App {
   }
 
   def customLocationEquals(o1: Measurement, o2: Measurement) = {
-    o1.lat == o2.lat && o1.long == o2.long
+    if ((o1 == null) || (o2 == null)) {
+      true
+    }
+    else {
+      o1.lat == o2.lat && o1.long == o2.long
+    }
   }
 
   def main(args: Array[String]) {
-    val conf = new SparkConf().setAppName("Hello Spark")
+    var resultedTrips: List[List[Product with java.io.Serializable]] = List[List[TripPoint]]()
+
+    val conf = new SparkConf().setAppName("Detectarea secventelor frecvente in trafic")
     conf.setMaster("local[*]")
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
     conf.set("spark.kryoserializer.buffer", "24")
@@ -118,64 +125,62 @@ object App {
       .format("com.databricks.spark.csv")
       .option("header", "false") // Use first line of all files as header
       .option("inferSchema", "true") // Automatically infer data types
-      .load(sources + "sample.txt")
+      .load(sources + "taxi_february_remastered.txt")
 
     df.take(10).foreach(println)
     df.printSchema()
 
-    val coordinatesRDD: RDD[Measurement] = df.map({
+    val coordinatesRDD: RDD[TripPoint] = df.map({
       case Row(id: Int, time: Timestamp, lat: Double, long: Double) =>
-        Measurement(id, time.getTime, lat, long)
+        TripPoint(id, time.getTime, encode(lat, long))
+      case _ => TripPoint(0, 0, "")
     })
 
-    coordinatesRDD.groupBy(c => c.id).map({ case (id, coordinates: Iterable[Measurement]) =>
-      val sorted: List[Measurement] = coordinates.toList.sortBy(c => c.time)
+    coordinatesRDD.groupBy(c => c.id).map({ case (id, coordinates: Iterable[TripPoint]) =>
+      var sorted: List[TripPoint] = coordinates.toList.sortBy(c => c.time)
+
+      if(sorted.size %  2 == 1) {
+        sorted = sorted.drop(1)
+      }
 
       val cuttings = sorted
         .sliding(2)
         .filter(pair => pair.tail.head.time - pair.head.time > 1000 * 180)
         .map(_.tail.head).toList
 
-      val tripEnds: List[Measurement] = cuttings.map({
-        case Measurement(id: Integer, time: Long, lat: Double, long: Double) =>
-          Measurement(id, time, lat, long)
+      val tripEnds: List[TripPoint] = cuttings.map({
+        case TripPoint(id: Integer, time: Long, hash: String) =>
+          TripPoint(id, time, hash)
       })
 
-      val sortedCoordinates: List[Measurement] = coordinates.toList.sortBy(m => m.time)
-      var rawTrips = List[List[Measurement]]()
-      var trips = List[List[Trippoint]]()
+      val sortedCoordinates: List[TripPoint] = coordinates.toList.sortBy(m => m.time)
+      var rawTrips = List[List[TripPoint]]()
+      //var trips = List[List[Trippoint]]()
 
       for (i <- 0 until tripEnds.length - 1 by 2) {
-        var trip = List[Measurement]()
+        var trip = List[TripPoint]()
         for (coordinate <- sortedCoordinates) {
           if ((coordinate.time > tripEnds(i).time) && (coordinate.time < tripEnds(i + 1).time)) {
             trip = coordinate :: trip
           }
         }
 
-        rawTrips = trip :: rawTrips
+        if (!trip.isEmpty) {
+          rawTrips = trip :: rawTrips
+        }
       }
 
-      rawTrips.foreach(trip =>
-        trips = trip.sliding(2)
-          .filter(pair => !customLocationEquals(pair.tail.head, pair.head))
-          .map(_.tail.head).toList.map({
-            case Measurement(id: Integer, time: Long, lat: Double, long: Double) =>
-              Trippoint(id, time, encode(lat, long))
-          }) :: trips
-      )
-
-      new PrintWriter(results + "trips.txt") {
-        for (trip <- trips) {
+      /*new PrintWriter(results + "trips" + i + ".txt") {
+        for (trip <- rawTrips) {
           for (point <- trip) {
             println(point.id + ","
               + new SimpleDateFormat("yyyy-MM-dd hh:mm:ss").format(point.time) + ","
               + point.hash)
           }
         }
-      }
+      }*/
 
-      new PrintWriter(results + "geohash.txt") {
+      /*new PrintWriter(results + "geohash" + i + ".txt") {
         for (trip <- rawTrips) {
           for (point <- trip) {
             val geohash = encode(point.lat, point.long)
@@ -187,21 +192,32 @@ object App {
               + decode(geohash))
           }
         }
-      }
+      }*/
 
-      rawTrips.size
-    }).collect.foreach(println)
+      rawTrips
+    }).collect.foreach(trip => resultedTrips = trip :: resultedTrips)
 
-    val data = sc.textFile(results + "trips.txt")
+    val intermediate: List[Product with java.io.Serializable] = resultedTrips.flatten
 
-    val transactions: RDD[Array[String]] = data.map(s => s.trim.split(','))
+    var arrayOfPoints: Array[List[String]] = resultedTrips.flatMap(taxi => taxi map {
+      case p:List[TripPoint] => p.map({
+       case TripPoint(id: Integer, time: Long, hash: String) => hash
+      }).take(20)
+    }).toArray
+
+    arrayOfPoints = arrayOfPoints.take(10)
+
+    var unique: Array[List[String]] = new Array[List[String]](0)
+
+    arrayOfPoints.foreach(list => unique = unique :+ list.distinct)
+
+    val transactions = sc.parallelize(Seq(unique))
 
     val fpg = new FPGrowth()
-      .setMinSupport(0.2)
-      .setNumPartitions(12)
+      .setMinSupport(0.9)
     val model = fpg.run(transactions)
 
-    model.freqItemsets.collect().foreach { itemset =>
+    model.freqItemsets.foreach { itemset =>
       println(itemset.items.mkString("[", ",", "]") + ", " + itemset.freq)
     }
 
@@ -209,7 +225,7 @@ object App {
     model.generateAssociationRules(minConfidence).collect().foreach { rule =>
       println(
         rule.antecedent.mkString("[", ",", "]")
-          + " => " + rule.consequent .mkString("[", ",", "]")
+          + " => " + rule.consequent.mkString("[", ",", "]")
           + ", " + rule.confidence)
     }
 
