@@ -2,7 +2,6 @@ package io.github
 
 import java.io.PrintWriter
 import java.sql.Timestamp
-import java.text.SimpleDateFormat
 
 import org.apache.spark.mllib.fpm.FPGrowth
 import org.apache.spark.sql.{Row, SQLContext}
@@ -26,7 +25,7 @@ object App {
 
   def mid(interval: (Double, Double)) = (interval._1 + interval._2) / 2.0
 
-  def decodeLimits(geohash: String): ((Double, Double), (Double, Double)) = {
+  /*def decodeLimits(geohash: String): ((Double, Double), (Double, Double)) = {
     def toBitList(s: String) = s.flatMap {
       c => ("00000" + base32.indexOf(c).toBinaryString).
         reverse.take(5).reverse.map('1' ==)
@@ -58,7 +57,7 @@ object App {
     }
   }
 
-  def encode(lat: Double, lon: Double, precision: Int = 6): (String) = {
+  def encode(lat: Double, lon: Double, precision: Int = 7): (String) = {
     var idx = 0;
     // index into base32 map
     var bit = 0;
@@ -102,7 +101,7 @@ object App {
     }
 
     return geohash
-  }
+  }*/
 
   def customLocationEquals(o1: Measurement, o2: Measurement) = {
     if ((o1 == null) || (o2 == null)) {
@@ -114,11 +113,12 @@ object App {
   }
 
   def main(args: Array[String]) {
+    val startTime = System.currentTimeMillis()
     val sequencesFileWriter = new PrintWriter(results + "Sequences.txt")
     val frequentSequenciesWriter = new PrintWriter(results + "FrequentSequences.txt")
 
     val conf = new SparkConf().setAppName("Detectarea secventelor frecvente in trafic")
-    conf.setMaster("local[*]")
+    conf.setMaster("local[1]")
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
     conf.set("spark.kryoserializer.buffer", "24")
     conf.registerKryoClasses(Array(classOf[ArrayBuffer[String]], classOf[ListBuffer[String]]))
@@ -188,10 +188,14 @@ object App {
     val data = sc.textFile(results + "Sequences.txt")
     val transactions: RDD[Array[String]] = data.map(s => s.trim.split(' '))
 
+    val algStart = System.currentTimeMillis()
+
     val fpg = new FPGrowth()
-      .setMinSupport(0.2)
+      .setMinSupport(0.15)
       .setNumPartitions(10)
     val model = fpg.run(transactions)
+
+    val algEnd = System.currentTimeMillis()
 
     model.freqItemsets.collect.foreach ( itemset => {
       println(itemset.items.mkString("[", ",", "]") + ", " + itemset.freq)
@@ -202,5 +206,10 @@ object App {
 
     frequentSequenciesWriter.close()
     sc.stop()
+
+    val endTime = System.currentTimeMillis()
+
+    print("Total time: " + (endTime - startTime) + "ms")
+    print("Algorithm time: " + (algEnd - algStart) + "ms")
   }
 }
