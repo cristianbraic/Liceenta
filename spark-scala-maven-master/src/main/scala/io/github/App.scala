@@ -115,10 +115,10 @@ object App {
   def main(args: Array[String]) {
     val startTime = System.currentTimeMillis()
     val sequencesFileWriter = new PrintWriter(results + "Sequences.txt")
-    val frequentSequenciesWriter = new PrintWriter(results + "FrequentSequences.txt")
+    val frequentSequencesWriter = new PrintWriter(results + "FrequentSequences.txt")
 
-    val conf = new SparkConf().setAppName("Detectarea secventelor frecvente in trafic")
-    conf.setMaster("local[1]")
+    val conf = new SparkConf().setAppName("Detectarea secventelor de coordonate geografice frecvente in traficul auto")
+    conf.setMaster("local[*]")
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
     conf.set("spark.kryoserializer.buffer", "24")
     conf.registerKryoClasses(Array(classOf[ArrayBuffer[String]], classOf[ListBuffer[String]]))
@@ -200,16 +200,16 @@ object App {
     model.freqItemsets.collect.foreach ( itemset => {
       println(itemset.items.mkString("[", ",", "]") + ", " + itemset.freq)
       itemset.items.foreach(item =>
-        frequentSequenciesWriter.println(GeoHash.fromGeohashString(item).getBoundingBoxCenterPoint.toString.stripPrefix("(").stripSuffix(")").trim)
+        frequentSequencesWriter.println(GeoHash.fromGeohashString(item).getBoundingBoxCenterPoint.toString.stripPrefix("(").stripSuffix(")").trim)
       )}
     )
 
-    frequentSequenciesWriter.close()
+    frequentSequencesWriter.close()
     sc.stop()
 
     val endTime = System.currentTimeMillis()
 
-    print("Total time: " + (endTime - startTime) + "ms")
-    print("Algorithm time: " + (algEnd - algStart) + "ms")
+    println("Total time: " + (endTime - startTime) + "ms")
+    println("Algorithm time: " + (algEnd - algStart) + "ms")
   }
 }
